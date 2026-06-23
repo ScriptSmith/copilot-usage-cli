@@ -1,0 +1,35 @@
+{
+  "name": "copilot-usage-cli",
+  "version": "1.0.0",
+  "description": "Report GitHub Copilot CLI AIC usage (today, this week, per session) from local session logs",
+  "bin": {
+    "copilot-usage": "copilot-usage.js"
+  },
+  "main": "copilot-usage.js",
+  "files": [
+    "copilot-usage.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "keywords": [
+    "github",
+    "copilot",
+    "usage",
+    "aic",
+    "cli",
+    "cost"
+  ],
+  "license": "MIT",
+  "author": "Adam Smith",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ScriptSmith/copilot-usage-cli.git"
+  },
+  "homepage": "https://github.com/ScriptSmith/copilot-usage-cli#readme",
+  "bugs": {
+    "url": "https://github.com/ScriptSmith/copilot-usage-cli/issues"
+  }
+}
