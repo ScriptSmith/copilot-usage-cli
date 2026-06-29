@@ -1,8 +1,7 @@
 # copilot-usage-cli
 
 Report your GitHub Copilot CLI AIC usage from the session logs Copilot writes
-locally. It reads those logs directly, so there are no network calls and no
-runtime dependencies.
+locally.
 
 ```
 $ copilot-usage
@@ -97,15 +96,6 @@ Options:
   -v, --version     Show version
 ```
 
-The bare `copilot-usage` prints only the totals table (all four periods; columns
-Period, Dollar, AIC, Sessions, UserMessages, AssistantMessages, TotalMessages) and
-a pointer to the detail. Naming a period (`copilot-usage week`, shorthand for
-`--period week`) scopes everything to that period and adds the detailed view: that
-period grouped by each dimension, then its sessions (which add ToolCalls), ranked
-by spend. Weeks start on Monday; periods are bucketed by each session's start time.
-Long tables are capped to the top 10 rows with a "... and N more" line; change the
-cap with `--top <n>` (`--top 0` shows every row, as does piping the output).
-
 The grouped tables (scoped to the chosen period) show where the spend went:
 
 - By model: AIC, requests, sessions, and input/output tokens per model
@@ -117,9 +107,6 @@ The grouped tables (scoped to the chosen period) show where the spend went:
   repo; otherwise the Branch column just shows the count or single branch.
 - By session: one row per session, ranked by dollar/AIC spend.
 
-The directory, repository, and branch come from each session's `session.start`
-event (`data.context.cwd` / `repository` / `branch`).
-
 `--dimension` jumps straight to one or more groupings with nothing else around
 them, which is handy for a focused look or for piping. It implies a period via the
 positional/`--period` (default all time); the list is comma-separated and order is
@@ -130,11 +117,6 @@ copilot-usage today --dimension repository   # today, only the by-repo split
 copilot-usage --dimension model              # all time, only the by-model table
 copilot-usage --dimension model,directory    # both, in that order, nothing else
 ```
-
-Anomalies are warned about only while recent (3 days by default); older ones are
-still reported but no longer flagged. Tune the window with `--anomaly-days` (`0`
-disables it). Incomplete sessions live under their own `incomplete` command and
-are never folded into totals.
 
 Examples:
 
@@ -233,10 +215,7 @@ included in `*_aic` totals. Each incomplete session has a `recent` flag (within
 `copilot-usage session <id> --json` returns one session's detail including
 per-model token counts.
 
-This is the interface the companion Copilot Usage GNOME Shell extension consumes:
-it runs `copilot-usage --json`, renders today/this-week in the top bar, and uses
-each period's `sessions` / `models` / `directories` / `repositories` for the
-per-period submenus.
+See the GNOME extension: [ScriptSmith/copilot-usage](https://github.com/ScriptSmith/copilot-usage)
 
 ## License
 
