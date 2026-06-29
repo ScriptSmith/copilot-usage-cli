@@ -1,6 +1,6 @@
 {
   "name": "copilot-usage-cli",
-  "version": "1.6.0",
+  "version": "1.1.0",
   "description": "Report GitHub Copilot CLI AIC usage (today, this week, per session) from local session logs",
   "bin": {
     "copilot-usage": "copilot-usage.js"

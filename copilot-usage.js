@@ -29,7 +29,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 
-const VERSION = '1.6.0'; // keep in sync with package.json
+const VERSION = '1.1.0'; // keep in sync with package.json
 const DEFAULT_COLLECTOR = process.env.COPILOT_USAGE_COLLECTOR || 'http://127.0.0.1:4318';
 const NANO_PER_AIC = 1e9;
 const DEFAULT_RATE = 0.01; // dollars per AIC
