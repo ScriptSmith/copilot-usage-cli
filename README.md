@@ -1,7 +1,8 @@
 # copilot-usage-cli
 
-Report your **GitHub Copilot CLI** AIC usage from the session logs Copilot writes
-locally. No API calls, no credentials, no dependencies.
+Report your GitHub Copilot CLI AIC usage from the session logs Copilot writes
+locally. It reads those logs directly, so there are no network calls and no
+runtime dependencies.
 
 ```
 $ copilot-usage
@@ -18,8 +19,8 @@ for a breakdown by model, directory and repository, plus that period's sessions.
 Run `copilot-usage incomplete` for sessions whose usage was never recorded.
 ```
 
-The bare command stays terse: just the at-a-glance totals. Name a period to drill
-in -- it scopes everything below the totals to that period:
+The bare command prints just the totals. Name a period to scope everything below
+the totals to that period:
 
 ```
 $ copilot-usage week
@@ -79,7 +80,7 @@ Options:
                     positional period, e.g. `copilot-usage week`.
   --dimension <list> Group by these dimensions: a comma-separated list of model,
                     directory, repository (also: all, none). When given, shows
-                    *only* those grouping tables -- no totals or session list.
+                    only those grouping tables, with no totals or session list.
                     Text only; --json always has all three.
   --top <n>         Rows to show per table before "... and N more" (default 10;
                     0 = show all). Also opts into the detailed view. Piped
@@ -96,9 +97,9 @@ Options:
   -v, --version     Show version
 ```
 
-**Bare `copilot-usage`** prints only the totals table (all four periods; columns
+The bare `copilot-usage` prints only the totals table (all four periods; columns
 Period, Dollar, AIC, Sessions, UserMessages, AssistantMessages, TotalMessages) and
-a pointer to the detail. **Naming a period** (`copilot-usage week`, shorthand for
+a pointer to the detail. Naming a period (`copilot-usage week`, shorthand for
 `--period week`) scopes everything to that period and adds the detailed view: that
 period grouped by each dimension, then its sessions (which add ToolCalls), ranked
 by spend. Weeks start on Monday; periods are bucketed by each session's start time.
@@ -107,20 +108,20 @@ cap with `--top <n>` (`--top 0` shows every row, as does piping the output).
 
 The grouped tables (scoped to the chosen period) show where the spend went:
 
-- **By model** -- AIC, requests, sessions, and input/output tokens per model
+- By model: AIC, requests, sessions, and input/output tokens per model
   (e.g. `claude-opus-4.8`, `gpt-5.5`), summed from each session's `modelMetrics`.
-- **By directory** -- AIC and session count per working directory (the `cwd`
-  Copilot was launched in), with the git repository it mapped to.
-- **By repository** -- AIC and session count per git repository. Focus on this
+- By directory: AIC and session count per working directory (the `cwd` Copilot
+  was launched in), with the git repository it mapped to.
+- By repository: AIC and session count per git repository. Focus on this
   dimension (`--dimension repository`) to also get a per-branch split under each
   repo; otherwise the Branch column just shows the count or single branch.
-- **By session** -- one row per session, ranked by dollar/AIC spend.
+- By session: one row per session, ranked by dollar/AIC spend.
 
 The directory, repository, and branch come from each session's `session.start`
 event (`data.context.cwd` / `repository` / `branch`).
 
 `--dimension` jumps straight to one or more groupings with nothing else around
-them -- handy for a focused look or for piping. It implies a period via the
+them, which is handy for a focused look or for piping. It implies a period via the
 positional/`--period` (default all time); the list is comma-separated and order is
 preserved:
 
@@ -130,7 +131,7 @@ copilot-usage --dimension model              # all time, only the by-model table
 copilot-usage --dimension model,directory    # both, in that order, nothing else
 ```
 
-Anomalies are *warned* about only while recent (3 days by default); older ones are
+Anomalies are warned about only while recent (3 days by default); older ones are
 still reported but no longer flagged. Tune the window with `--anomaly-days` (`0`
 disables it). Incomplete sessions live under their own `incomplete` command and
 are never folded into totals.
@@ -152,44 +153,15 @@ copilot-usage sessions today --json
 copilot-usage --rate 0.012          # different $/AIC
 ```
 
-## How it works
-
-GitHub Copilot CLI writes a per-session log to
-`~/.copilot/session-state/<id>/events.jsonl` and appends a `session.shutdown`
-event when the session closes. Usage is recorded there as nano-AIU at
-`data.totalNanoAiu`:
-
-```
-AIC = totalNanoAiu / 1e9
-```
-
-- A resumed session writes another shutdown event for that segment; their AIC is
-  additive, so all shutdown events in a file are summed.
-- Sessions from before ~2026-06 predate nano-AIU tracking (only an unreliable
-  `requests.cost` field exists) and are **excluded** from totals.
-- Sessions still open have no shutdown event yet, so they don't appear until they
-  exit.
-- A session that ends abnormally (crash, kill, reboot) never writes a shutdown
-  event, and nothing is recorded incrementally beforehand, so its cost is
-  unrecoverable. Such sessions are reported separately as **incomplete** (the
-  `copilot-usage incomplete` command, and `incomplete_count` /
-  `incomplete_sessions` in the summary JSON); they are never added to totals.
-- `--rate` only changes the dollar display; the underlying unit is AIC.
-
-A small mtime/size cache under `${XDG_CACHE_HOME:-~/.cache}/copilot-usage-cli/`
-makes repeat runs cheap (the first run reads every log; later runs only re-read
-files that changed).
-
 ## Live usage (`--collector`)
 
-On-disk totals only count *closed* sessions. With `--collector`, the CLI also
-fetches live per-session usage from a local OTLP collector (the companion
-`collector/` in this repo) and reconciles it with the on-disk data **by session
-id**:
+On-disk totals only count closed sessions. With `--collector`, the CLI also
+fetches live per-session usage from a local OTLP collector and reconciles it with
+the on-disk data by session id:
 
 - A closed session's shutdown total is authoritative.
 - An open session (no shutdown yet) has its live AIC added to the periods, so it
-  counts *before* it exits. These appear in `live_sessions`, folded into each
+  counts before it exits. These appear in `live_sessions`, folded into each
   period's `sessions` list, and with `live:true` in `today_sessions`.
 - If the collector and the shutdown total disagree for the same session, it is
   reported in `anomalies` (a `mismatch`); a collector session with no log on disk
@@ -200,11 +172,9 @@ Extra JSON fields when `--collector` is used: `collector{connected,url,session_c
 `today_aic_live` / `week_aic_live` / `month_aic_live` / `all_aic_live`,
 `periods[].aic_live`, `periods[].live_session_count`, `live_aic`,
 `live_session_count`, `live_sessions`, `anomalies` (each with `start_ms` /
-`recent`), `anomaly_recent_count`. Without the flag the output
-is unchanged. The collector requires
-Copilot to be exporting OpenTelemetry
-(`OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318`); see the repo README for
-setup.
+`recent`), `anomaly_recent_count`. Without the flag the output is unchanged. The
+collector requires Copilot to be exporting OpenTelemetry
+(`OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318`).
 
 ## JSON output
 
@@ -228,17 +198,17 @@ setup.
       "cache_read_tokens": 151261116, "cache_write_tokens": 6602881, "reasoning_tokens": 86086 }
   ],
   "directories": [
-    { "dir": "/home/adam/src/transcription", "repo": "eresearchqut/transcription",
+    { "dir": "/home/you/src/project", "repo": "you/project",
       "aic": 9394.38, "sessions": 49, "total_messages": 1586, "tool_calls": 1658 }
   ],
   "repositories": [
-    { "repo": "eresearchqut/transcription", "aic": 11881.26, "sessions": 56,
+    { "repo": "you/project", "aic": 11881.26, "sessions": 56,
       "total_messages": 1999, "tool_calls": 2322,
       "branches": [ { "branch": "dev", "aic": 2993.09, "sessions": 10 } ] }
   ],
   "today_sessions": [
     { "id": "6907b511-...", "aic": 3.34, "start_ms": 1782216998708,
-      "cwd": "/home/adam/src/transcription", "repo": "eresearchqut/transcription", "branch": "dev",
+      "cwd": "/home/you/src/project", "repo": "you/project", "branch": "dev",
       "user_messages": 1, "assistant_messages": 1, "total_messages": 2, "tool_calls": 0 }
   ],
   "incomplete_count": 2,
@@ -251,14 +221,12 @@ setup.
 }
 ```
 
-Top-level `models` / `directories` / `repositories` are the **all-time**
-groupings; each entry in `periods` also carries its own period-scoped copy of the
-three, plus that period's `sessions` list. `incomplete_count` /
-`incomplete_sessions` cover sessions with activity but no shutdown event (usage
-never recorded); they are not included in `*_aic` totals. Each incomplete session
-has a `recent` flag (within `--incomplete-days`), and `incomplete_recent_count`
-is how many are recent. (The summary JSON still carries these for convenience;
-`copilot-usage incomplete` is the dedicated view.)
+Top-level `models` / `directories` / `repositories` are the all-time groupings;
+each entry in `periods` also carries its own period-scoped copy of the three, plus
+that period's `sessions` list. `incomplete_count` / `incomplete_sessions` cover
+sessions with activity but no shutdown event (usage never recorded); they are not
+included in `*_aic` totals. Each incomplete session has a `recent` flag (within
+`--incomplete-days`), and `incomplete_recent_count` is how many are recent.
 
 `copilot-usage sessions [period] --json` returns `{ period, session_count, totals, incomplete_count, sessions: [...] }`;
 `copilot-usage incomplete [period] --json` returns `{ period, incomplete_count, sessions: [...] }`;
