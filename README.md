@@ -62,6 +62,8 @@ Options:
   --dimension <list> Which dimensions the summary groups by (default all):
                     a comma-separated list of model, directory, repository
                     (also: all, none). Text only; --json always has all three.
+  --top <n>         Rows to show per summary/session table before "... and N
+                    more" (default 10; 0 = show all). Text only.
   --anomaly-days <n>    Warn about anomalies only when newer than n days
                         (default 3; 0 = never). Older ones stay in --json.
   --incomplete-days <n> Warn about incomplete sessions only when newer than n
@@ -81,7 +83,8 @@ just the chosen period otherwise; columns Period, Dollar, AIC, Sessions,
 UserMessages, AssistantMessages, TotalMessages), then that period grouped by
 dimension, then that period's sessions (which add ToolCalls). Weeks start on
 Monday; periods are bucketed by each session's start time. Long tables are capped
-to the top 10 rows with a "... and N more" line.
+to the top 10 rows with a "... and N more" line; change the cap with `--top <n>`
+(`--top 0` shows every row).
 
 The grouped tables (scoped to the chosen period) show where the spend went:
 
@@ -119,6 +122,8 @@ copilot-usage sessions              # every session that recorded usage
 copilot-usage sessions week         # sessions since Monday
 copilot-usage session ca2c4401      # detail (prefix is enough)
 copilot-usage --dimension model     # only the by-model grouping
+copilot-usage --top 25              # show up to 25 rows per table
+copilot-usage --top 0              # show every row, no cap
 copilot-usage --incomplete-days 0   # never warn about incomplete sessions
 copilot-usage --json                # JSON summary
 copilot-usage sessions today --json

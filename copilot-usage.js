@@ -61,6 +61,7 @@ const DIMENSION_ALIASES = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_ANOMALY_DAYS = 3;
 const DEFAULT_INCOMPLETE_DAYS = 7;
+const DEFAULT_TOP = 10; // rows shown per summary table before "... and N more"
 
 // Within the warning window? Items with no known timestamp are surfaced (warned)
 // while aging is on; a window of 0 disables warnings entirely.
@@ -665,47 +666,45 @@ function shortPath(p) {
     return p;
 }
 
-// Rows beyond this are summarised as "... and N more" to keep the summary short;
-// narrow with a period (`copilot-usage week`) or --dimension to see everything.
-const SUMMARY_ROW_CAP = 10;
-
-// Print a titled table, capped to SUMMARY_ROW_CAP rows with a "... and N more"
-// footer. Prints nothing for an empty table.
-function printCappedTable(title, headers, aligns, rows) {
+// Print a titled table, capped to `cap` rows with a "... and N more" footer
+// (cap defaults to DEFAULT_TOP; a non-finite cap shows every row). Narrow with a
+// period (`copilot-usage week`), --dimension, or raise/clear it with --top.
+// Prints nothing for an empty table.
+function printCappedTable(title, headers, aligns, rows, cap = DEFAULT_TOP) {
     if (!rows.length) return;
     console.log('');
     console.log(title);
     console.log('');
-    const shown = rows.slice(0, SUMMARY_ROW_CAP);
+    const shown = rows.slice(0, cap);
     console.log(renderTable(headers, shown, aligns));
     if (rows.length > shown.length) {
         console.log(INDENT + `... and ${rows.length - shown.length} more`);
     }
 }
 
-function printModels(src, rate, periodLabel) {
+function printModels(src, rate, periodLabel, cap) {
     const rows = (src.models || []).map(m => [
         m.model, usd(m.aic, rate), m.aic.toFixed(2), m.requests, m.sessions,
         fmtTokens(m.input_tokens), fmtTokens(m.output_tokens),
     ]);
     printCappedTable(`By model (${periodLabel})`,
         ['Model', 'Dollar', 'AIC', 'Requests', 'Sessions', 'InputTokens', 'OutputTokens'],
-        ['l', 'r', 'r', 'r', 'r', 'r', 'r'], rows);
+        ['l', 'r', 'r', 'r', 'r', 'r', 'r'], rows, cap);
 }
 
-function printDirectories(src, rate, periodLabel) {
+function printDirectories(src, rate, periodLabel, cap) {
     const rows = (src.directories || []).map(d => [
         shortPath(d.dir), usd(d.aic, rate), d.aic.toFixed(2), d.sessions, d.repo || '-',
     ]);
     printCappedTable(`By directory (${periodLabel})`,
         ['Directory', 'Dollar', 'AIC', 'Sessions', 'Repository'],
-        ['l', 'r', 'r', 'r', 'l'], rows);
+        ['l', 'r', 'r', 'r', 'l'], rows, cap);
 }
 
 // `withBranches` adds a per-branch sub-table for each shown repository; it's only
 // passed when repository is the sole requested dimension, so the default summary
 // stays short (the Branch column already shows the count or the single branch).
-function printRepositories(src, rate, periodLabel, withBranches) {
+function printRepositories(src, rate, periodLabel, withBranches, cap) {
     const repos = src.repositories || [];
     const rows = repos.map(r => {
         const branches = r.branches || [];
@@ -714,27 +713,27 @@ function printRepositories(src, rate, periodLabel, withBranches) {
     });
     printCappedTable(`By repository (${periodLabel})`,
         ['Repository', 'Dollar', 'AIC', 'Sessions', 'Branch'],
-        ['l', 'r', 'r', 'r', 'l'], rows);
+        ['l', 'r', 'r', 'r', 'l'], rows, cap);
     if (!withBranches) return;
     // Per-branch detail for the shown repositories worked on across >1 branch.
-    for (const r of repos.slice(0, SUMMARY_ROW_CAP).filter(r => (r.branches || []).length > 1)) {
+    for (const r of repos.slice(0, cap).filter(r => (r.branches || []).length > 1)) {
         const brows = r.branches.map(b => [b.branch, usd(b.aic, rate), b.aic.toFixed(2), b.sessions]);
         printCappedTable(INDENT + `${r.repo} by branch:`,
-            ['Branch', 'Dollar', 'AIC', 'Sessions'], ['l', 'r', 'r', 'r'], brows);
+            ['Branch', 'Dollar', 'AIC', 'Sessions'], ['l', 'r', 'r', 'r'], brows, cap);
     }
 }
 
 // Print the requested dimension tables for one period's totals, in the requested
 // order. `src` carries .models/.directories/.repositories; `which` is a subset of
 // DIMENSIONS (empty prints nothing); `periodLabel` annotates the headings.
-function printDimensions(src, rate, which, periodLabel) {
+function printDimensions(src, rate, which, periodLabel, cap) {
     which = which || DIMENSIONS;
     // Show the per-branch drill-in only when the user has focused on repositories.
     const withBranches = which.length === 1 && which[0] === 'repository';
     for (const kind of which) {
-        if (kind === 'model') printModels(src, rate, periodLabel);
-        else if (kind === 'directory') printDirectories(src, rate, periodLabel);
-        else if (kind === 'repository') printRepositories(src, rate, periodLabel, withBranches);
+        if (kind === 'model') printModels(src, rate, periodLabel, cap);
+        else if (kind === 'directory') printDirectories(src, rate, periodLabel, cap);
+        else if (kind === 'repository') printRepositories(src, rate, periodLabel, withBranches, cap);
     }
 }
 
@@ -791,7 +790,7 @@ async function cmdSummary(opts) {
     // Break the chosen period down by the requested dimensions, then list that
     // period's sessions (capped) -- everything below the table is scoped to it.
     const src = sum.periods.find(p => p.period === period);
-    printDimensions(src, opts.rate, opts.dimensions, PERIOD_LABELS[period].toLowerCase());
+    printDimensions(src, opts.rate, opts.dimensions, PERIOD_LABELS[period].toLowerCase(), opts.top);
 
     const sessTitle = period === 'all' ? 'Recent sessions' : `${PERIOD_LABELS[period]}'s sessions`;
     const fmtWhen = period === 'today' ? fmtClock : fmtDateTime;
@@ -805,7 +804,7 @@ async function cmdSummary(opts) {
     } else {
         printCappedTable(sessTitle,
             ['Started', 'Dollar', 'AIC', 'UserMessages', 'AssistantMessages', 'TotalMessages', 'ToolCalls', 'Session'],
-            SESSION_ALIGNS, sessRows);
+            SESSION_ALIGNS, sessRows, opts.top);
     }
 
     printIncompleteNote(sum.incomplete_recent_count, sum.incomplete_count, opts.incompleteDays);
@@ -961,6 +960,8 @@ Options:
                     Which dimensions the summary groups by: a comma-separated list
                     of ${DIMENSIONS.join(', ')} (also: all, none). Default all.
                     Affects text only; --json always has all three.
+  --top <n>         Rows to show per summary/session table before "... and N more"
+                    (default ${DEFAULT_TOP}; 0 = show all). Affects text only.
   --anomaly-days <n>
                     Warn about anomalies only when newer than n days (default
                     ${DEFAULT_ANOMALY_DAYS}; 0 = never). Older ones are still listed, just not flagged.
@@ -1016,6 +1017,7 @@ function parseArgs(argv) {
         json: false, rate: DEFAULT_RATE, cmd: null, arg: null,
         collector: null, collectorTimeout: 1500, dimensions: DIMENSIONS.slice(),
         period: null, anomalyDays: DEFAULT_ANOMALY_DAYS, incompleteDays: DEFAULT_INCOMPLETE_DAYS,
+        top: DEFAULT_TOP,
     };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -1031,6 +1033,8 @@ function parseArgs(argv) {
         else if (a.startsWith('--anomaly-days=')) opts.anomalyDays = parseInt(a.slice('--anomaly-days='.length), 10);
         else if (a === '--incomplete-days') opts.incompleteDays = parseInt(argv[++i], 10);
         else if (a.startsWith('--incomplete-days=')) opts.incompleteDays = parseInt(a.slice('--incomplete-days='.length), 10);
+        else if (a === '--top') opts.top = parseInt(argv[++i], 10);
+        else if (a.startsWith('--top=')) opts.top = parseInt(a.slice('--top='.length), 10);
         else if (a === '--collector') opts.collector = DEFAULT_COLLECTOR;
         else if (a.startsWith('--collector=')) opts.collector = a.slice('--collector='.length);
         else if (a === '--no-collector') opts.collector = null;
@@ -1043,6 +1047,9 @@ function parseArgs(argv) {
     if (!isFinite(opts.rate) || opts.rate < 0) opts.rate = DEFAULT_RATE;
     if (!Number.isFinite(opts.anomalyDays) || opts.anomalyDays < 0) opts.anomalyDays = DEFAULT_ANOMALY_DAYS;
     if (!Number.isFinite(opts.incompleteDays) || opts.incompleteDays < 0) opts.incompleteDays = DEFAULT_INCOMPLETE_DAYS;
+    // --top 0 means "no cap": show every row. Negative/NaN falls back to the default.
+    if (opts.top === 0) opts.top = Infinity;
+    else if (!Number.isFinite(opts.top) || opts.top < 0) opts.top = DEFAULT_TOP;
     return opts;
 }
 
