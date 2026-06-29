@@ -30,16 +30,40 @@ GitHub Copilot usage
 
 By model (this week)
 
-  Model              Dollar       AIC  Requests  Sessions  InputTokens  OutputTokens
-  claude-opus-4.8   $144.37  14436.64      1676        44       158.0M          1.0M
-  gpt-5.5            $77.74   7774.39      1338        33        71.2M        531.4k
-  ...
+  Model              Dollar      AIC  Requests  Sessions  InputTokens  OutputTokens
+  claude-opus-4.8    $31.04  3104.27       668        22        64.1M        401.5k
+  gpt-5.5            $11.99  1198.63       372        15        23.4M        162.8k
+  claude-sonnet-4.6   $3.00   300.22       104         6         6.2M         47.1k
+
+By directory (this week)
+
+  Directory      Dollar      AIC  Sessions  Repository
+  ~/src/project  $28.93  2893.17        18  you/project
+  ~/src/api      $12.74  1274.36         9  you/api
+  ~/src/notes     $2.88   287.74         3  -
+  ~               $1.48   147.85         1  -
+
+By repository (this week)
+
+  Repository   Dollar      AIC  Sessions  Branch
+  you/project  $28.93  2893.17        18  3 branches
+  you/api      $12.74  1274.36         9  main
+  (no repo)     $4.36   435.59         4  (no branch)
 
 By session (this week)
 
   Started           Dollar     AIC  UserMessages  AssistantMessages  TotalMessages  ToolCalls  Session
-  2026-06-29 22:16   $1.52  151.66             7                 24             31         22  6907b511
-  ...
+  2026-06-29 22:16   $4.87  486.91             9                 78             87         71  6907b511
+  2026-06-28 14:52   $4.21  421.07             8                 71             79         64  a1f4d2c8
+  2026-06-27 10:34   $3.88  388.42             7                 64             71         59  3b8e0f17
+  2026-06-29 18:03   $3.42  341.55             6                 59             65         54  c7576694
+  2026-06-26 16:20   $3.13  312.88             6                 53             59         47  dd9a45b8
+  2026-06-25 09:11   $2.86  285.93             5                 48             53         44  2ae0945d
+  2026-06-28 11:27   $2.64  264.19             5                 44             49         41  7d1e56fc
+  2026-06-24 13:46   $2.33  233.47             4                 39             43         35  f66d60b1
+  2026-06-29 12:23   $2.02  201.63             4                 33             37         29  bb5c3468
+  2026-06-23 17:38   $1.78  178.42             3                 28             31         24  8b4726cc
+  ... and 21 more
 ```
 
 Or jump straight to one grouping with `--dimension` (see below).
