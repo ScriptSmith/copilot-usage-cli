@@ -29,7 +29,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 
-const VERSION = '1.1.0'; // keep in sync with package.json
+const VERSION = '1.2.0'; // keep in sync with package.json
 const DEFAULT_COLLECTOR = process.env.COPILOT_USAGE_COLLECTOR || 'http://127.0.0.1:4318';
 const NANO_PER_AIC = 1e9;
 const DEFAULT_RATE = 0.01; // dollars per AIC
@@ -595,14 +595,68 @@ function padLeft(s, w) {
     return s.length >= w ? s : ' '.repeat(w - s.length) + s;
 }
 
+// Middle-truncate s to width w with a single ellipsis, keeping both ends (so a
+// path keeps its ~ and its leaf). A no-op when it already fits.
+function elide(s, w) {
+    s = String(s);
+    if (s.length <= w) return s;
+    if (w <= 1) return s.slice(0, Math.max(0, w));
+    const keep = w - 1; // room for the ellipsis
+    const head = Math.ceil(keep / 2);
+    const tail = keep - head;
+    return s.slice(0, head) + '…' + (tail ? s.slice(s.length - tail) : '');
+}
+
 const INDENT = '  ';
 
+// Human-facing line printer that collapses leading and consecutive blank lines.
+// Each section can lead with a blank separator without doubling up where two meet
+// (or appearing above the first one). JSON, warnings and errors bypass this.
+let _lastBlank = true; // start "blank" so the very first line never gets a leader
+function out(line) {
+    if (!line) {
+        if (_lastBlank) return;
+        _lastBlank = true;
+        console.log('');
+    } else {
+        _lastBlank = false;
+        console.log(line);
+    }
+}
+
 // headers: string[], rows: (string|number)[][], aligns: ('l'|'r')[]
-function renderTable(headers, rows, aligns) {
+// maxWidth (default: the TTY width) caps the rendered line length: when the
+// natural table is too wide, the widest left-aligned column is shrunk and its
+// cells middle-elided. Right-aligned (numeric) columns and headers are never
+// truncated. Undefined/non-finite (e.g. piped output) means render at full width.
+function renderTable(headers, rows, aligns, maxWidth = process.stdout.columns) {
+    const ncols = headers.length;
     const widths = headers.map((h, i) =>
         Math.max(String(h).length, ...rows.map(r => String(r[i]).length)));
-    const fmtRow = cells => (INDENT + cells.map((c, i) =>
-        aligns[i] === 'r' ? padLeft(c, widths[i]) : pad(c, widths[i])).join('  ')).replace(/\s+$/, '');
+    if (maxWidth && isFinite(maxWidth)) {
+        const floorFor = i => Math.max(8, String(headers[i]).length);
+        const sep = 2 * Math.max(0, ncols - 1);
+        const lineWidth = () => INDENT.length + widths.reduce((a, b) => a + b, 0) + sep;
+        let over = lineWidth() - maxWidth;
+        // Trim a column at a time off the currently-widest shrinkable left-aligned
+        // column, so several wide text columns converge toward equal width rather
+        // than one being crushed to its floor while another stays long.
+        while (over > 0) {
+            let idx = -1, best = -1;
+            for (let i = 0; i < ncols; i++) {
+                if (aligns[i] === 'r' || widths[i] <= floorFor(i)) continue;
+                if (widths[i] > best) { best = widths[i]; idx = i; }
+            }
+            if (idx === -1) break;
+            widths[idx] -= 1;
+            over -= 1;
+        }
+    }
+    const fit = (c, i) => {
+        const s = elide(c, widths[i]);
+        return aligns[i] === 'r' ? padLeft(s, widths[i]) : pad(s, widths[i]);
+    };
+    const fmtRow = cells => (INDENT + cells.map((c, i) => fit(c, i)).join('  ')).replace(/\s+$/, '');
     return [fmtRow(headers), ...rows.map(r => fmtRow(r))].join('\n');
 }
 
@@ -610,49 +664,32 @@ function renderTable(headers, rows, aligns) {
 function printCollectorNote(sum) {
     const c = sum.collector;
     if (!c || !c.connected) return;
+    out('');
     if (sum.live_session_count) {
         const s = sum.live_session_count === 1 ? '' : 's';
-        console.log(`Live: +${sum.live_aic.toFixed(2)} AIC from ${sum.live_session_count} open session${s} ` +
+        out(`Live: +${sum.live_aic.toFixed(2)} AIC from ${sum.live_session_count} open session${s} ` +
             `(collector ${c.url}, ${c.session_count} tracked).`);
     } else {
-        console.log(`Live: collector connected (${c.url}, ${c.session_count} tracked), no open sessions.`);
+        out(`Live: collector connected (${c.url}, ${c.session_count} tracked), no open sessions.`);
     }
     // Warn about recent anomalies only; older ones are noted quietly (still in JSON).
     const anomalies = sum.anomalies || [];
     const recent = anomalies.filter(a => a.recent);
     const old = anomalies.length - recent.length;
     if (recent.length) {
-        console.log(`Anomalies (${recent.length}):`);
+        out(`Anomalies (${recent.length}):`);
         for (const a of recent.slice(0, 10)) {
             const id = (a.id || '').slice(0, 8);
             if (a.type === 'mismatch') {
-                console.log(`  ${id}  collector ${a.collector_aic} vs shutdown ${a.shutdown_aic} AIC (Δ${a.diff})`);
+                out(`  ${id}  collector ${a.collector_aic} vs shutdown ${a.shutdown_aic} AIC (Δ${a.diff})`);
             } else if (a.type === 'orphan') {
-                console.log(`  ${id}  collector reports ${a.collector_aic} AIC but no session log on disk`);
+                out(`  ${id}  collector reports ${a.collector_aic} AIC but no session log on disk`);
             }
         }
-        if (recent.length > 10) console.log(`  ... and ${recent.length - 10} more`);
-        if (old) console.log(`  (${old} older anomal${old === 1 ? 'y' : 'ies'} not shown)`);
+        if (recent.length > 10) out(`  ... and ${recent.length - 10} more`);
+        if (old) out(`  (${old} older anomal${old === 1 ? 'y' : 'ies'} not shown)`);
     } else if (old) {
-        console.log(`${old} older anomal${old === 1 ? 'y' : 'ies'} (not shown).`);
-    }
-    console.log('');
-}
-
-// Footnote for sessions that have activity but never wrote a shutdown event.
-// Warns about recent ones; older ones are noted quietly (still in JSON).
-function printIncompleteNote(recent, total, days) {
-    if (!total) return;
-    console.log('');
-    if (recent > 0) {
-        const s = recent === 1 ? '' : 's';
-        console.log(`${recent} incomplete session${s}: no shutdown event recorded ` +
-            `(still running or ended abnormally), so usage is not counted.`);
-        const old = total - recent;
-        if (old > 0) console.log(`(${old} more older than ${days} days, not shown.)`);
-    } else {
-        const s = total === 1 ? '' : 's';
-        console.log(`${total} incomplete session${s} older than ${days} days (usage not counted).`);
+        out(`${old} older anomal${old === 1 ? 'y' : 'ies'} (not shown).`);
     }
 }
 
@@ -672,13 +709,13 @@ function shortPath(p) {
 // Prints nothing for an empty table.
 function printCappedTable(title, headers, aligns, rows, cap = DEFAULT_TOP) {
     if (!rows.length) return;
-    console.log('');
-    console.log(title);
-    console.log('');
+    out('');
+    out(title);
+    out('');
     const shown = rows.slice(0, cap);
-    console.log(renderTable(headers, shown, aligns));
+    out(renderTable(headers, shown, aligns));
     if (rows.length > shown.length) {
-        console.log(INDENT + `... and ${rows.length - shown.length} more`);
+        out(INDENT + `... and ${rows.length - shown.length} more`);
     }
 }
 
@@ -754,11 +791,19 @@ async function cmdSummary(opts) {
     const now = new Date();
     // The period to break down by dimension: --period, else a positional period
     // (`copilot-usage week`), else all time.
-    let period = opts.period || opts.arg || 'all';
+    const explicitPeriod = opts.period || opts.arg || null;
+    const period = explicitPeriod || 'all';
     if (!PERIODS.includes(period)) {
         fail(`unknown period "${period}" (use one of: ${PERIODS.join(', ')})`, opts);
         return;
     }
+    // With an explicit --dimension, show *only* those grouping tables (scoped to the
+    // period, default all): no totals, no session list. Naming a period -- or --top
+    // -- gives the full detailed view (totals + every dimension + by-session). Bare
+    // `copilot-usage` stays terse: just the totals table.
+    const dimensionOnly = opts.dimensionsExplicit;
+    const detailed = dimensionOnly || !!explicitPeriod || opts.topExplicit;
+
     const { sessions, incomplete, error } = collect(false);
     const sum = summarize(sessions, incomplete, now, opts.incompleteDays);
     if (opts.collector) {
@@ -771,8 +816,17 @@ async function cmdSummary(opts) {
     }
     if (error) process.stderr.write(`warning: ${error}\n`);
 
-    console.log('GitHub Copilot usage');
-    console.log('');
+    const periodLabel = PERIOD_LABELS[period].toLowerCase();
+    const src = sum.periods.find(p => p.period === period);
+
+    // Dimension-only: just the requested grouping table(s), nothing else.
+    if (dimensionOnly) {
+        printDimensions(src, opts.rate, opts.dimensions, periodLabel, opts.top);
+        return;
+    }
+
+    out('GitHub Copilot usage');
+    out('');
     const live = sum.collector && sum.collector.connected;
     // Totals table: all periods for the at-a-glance default (all), or just the one
     // chosen period when narrowed -- so `copilot-usage week` is only about the week.
@@ -783,31 +837,37 @@ async function cmdSummary(opts) {
     ].concat(live ? [(sp.aic_live).toFixed(2)] : []));
     const headers = live ? SUMMARY_HEADERS.concat(['AIC+Live']) : SUMMARY_HEADERS;
     const aligns = live ? SUMMARY_ALIGNS.concat(['r']) : SUMMARY_ALIGNS;
-    console.log(renderTable(headers, rows, aligns));
-    console.log('');
+    out(renderTable(headers, rows, aligns));
     printCollectorNote(sum);
 
-    // Break the chosen period down by the requested dimensions, then list that
-    // period's sessions (capped) -- everything below the table is scoped to it.
-    const src = sum.periods.find(p => p.period === period);
-    printDimensions(src, opts.rate, opts.dimensions, PERIOD_LABELS[period].toLowerCase(), opts.top);
+    if (detailed) {
+        // Break the chosen period down by the requested dimensions, then rank that
+        // period's sessions by spend -- everything below the table is scoped to it.
+        printDimensions(src, opts.rate, opts.dimensions, periodLabel, opts.top);
 
-    const sessTitle = period === 'all' ? 'Recent sessions' : `${PERIOD_LABELS[period]}'s sessions`;
-    const fmtWhen = period === 'today' ? fmtClock : fmtDateTime;
-    const sessRows = src.sessions.map(s =>
-        sessionRow(s, fmtWhen(s.start_ms), s.id.slice(0, 8), opts.rate));
-    if (!sessRows.length) {
-        console.log('');
-        console.log(sessTitle);
-        console.log('');
-        console.log(INDENT + '(none)');
+        const fmtWhen = period === 'today' ? fmtClock : fmtDateTime;
+        const sessRows = src.sessions
+            .slice()
+            .sort((a, b) => b.aic - a.aic)
+            .map(s => sessionRow(s, fmtWhen(s.start_ms), s.id.slice(0, 8), opts.rate));
+        const sessTitle = `By session (${periodLabel})`;
+        if (!sessRows.length) {
+            out('');
+            out(sessTitle);
+            out('');
+            out(INDENT + '(none)');
+        } else {
+            printCappedTable(sessTitle,
+                ['Started', 'Dollar', 'AIC', 'UserMessages', 'AssistantMessages', 'TotalMessages', 'ToolCalls', 'Session'],
+                SESSION_ALIGNS, sessRows, opts.top);
+        }
     } else {
-        printCappedTable(sessTitle,
-            ['Started', 'Dollar', 'AIC', 'UserMessages', 'AssistantMessages', 'TotalMessages', 'ToolCalls', 'Session'],
-            SESSION_ALIGNS, sessRows, opts.top);
+        // Pointer to the detail rather than dumping it all by default.
+        out('');
+        out('Showing totals only. Run `copilot-usage <period>` (today, week, month, all)');
+        out("for a breakdown by model, directory and repository, plus that period's sessions.");
+        out('Run `copilot-usage incomplete` for sessions whose usage was never recorded.');
     }
-
-    printIncompleteNote(sum.incomplete_recent_count, sum.incomplete_count, opts.incompleteDays);
 }
 
 function cmdSessions(opts) {
@@ -818,7 +878,6 @@ function cmdSessions(opts) {
     }
     const now = new Date();
     const { sessions, incomplete, error } = collect(false);
-    const incompleteRecent = incomplete.filter(s => isRecent(s.start_ms, now, opts.incompleteDays)).length;
     const inRange = sessions
         .filter(s => inPeriod(s.start_ms, period, now))
         .sort((a, b) => (b.start_ms || 0) - (a.start_ms || 0));
@@ -830,13 +889,12 @@ function cmdSessions(opts) {
     }
     if (error) process.stderr.write(`warning: ${error}\n`);
     if (!inRange.length) {
-        console.log(`No sessions with recorded usage (${PERIOD_LABELS[period].toLowerCase()}).`);
-        printIncompleteNote(incompleteRecent, incomplete.length, opts.incompleteDays);
+        out(`No sessions with recorded usage (${PERIOD_LABELS[period].toLowerCase()}).`);
         return;
     }
 
-    console.log(`Sessions (${PERIOD_LABELS[period].toLowerCase()})`);
-    console.log('');
+    out(`Sessions (${PERIOD_LABELS[period].toLowerCase()})`);
+    out('');
     const headers = ['Started', 'Dollar', 'AIC', 'UserMessages', 'AssistantMessages', 'TotalMessages', 'ToolCalls', 'Session'];
     const rows = inRange.map(s => sessionRow(s, fmtDateTime(s.start_ms), s.id, opts.rate));
     // totals row
@@ -844,8 +902,49 @@ function cmdSessions(opts) {
     rows.push(['', usd(t.aic, opts.rate), t.aic.toFixed(2),
         t.user_messages, t.assistant_messages, t.total_messages, t.tool_calls,
         `${inRange.length} sessions`]);
-    console.log(renderTable(headers, rows, SESSION_ALIGNS));
-    printIncompleteNote(incomplete.length);
+    out(renderTable(headers, rows, SESSION_ALIGNS));
+}
+
+// Sessions that have activity but never wrote a shutdown event: still running, or
+// ended abnormally (crash, kill, reboot). Their usage was never recorded, so they
+// are excluded from every total and listed only here.
+function cmdIncomplete(opts) {
+    const period = opts.arg || 'all';
+    if (!PERIODS.includes(period)) {
+        fail(`unknown period "${period}" (use one of: ${PERIODS.join(', ')})`, opts);
+        return;
+    }
+    const now = new Date();
+    const { incomplete, error } = collect(false);
+    const inRange = incomplete
+        .filter(s => inPeriod(s.start_ms, period, now))
+        .sort((a, b) => (b.start_ms || 0) - (a.start_ms || 0));
+
+    if (opts.json) {
+        process.stdout.write(JSON.stringify({
+            period, incomplete_count: inRange.length, sessions: inRange.map(leanSession),
+        }));
+        return;
+    }
+    if (error) process.stderr.write(`warning: ${error}\n`);
+    if (!inRange.length) {
+        out(`No incomplete sessions (${PERIOD_LABELS[period].toLowerCase()}).`);
+        return;
+    }
+
+    out(`Incomplete sessions (${PERIOD_LABELS[period].toLowerCase()})`);
+    out('');
+    const rows = inRange.map(s => [
+        fmtDateTime(s.start_ms),
+        s.user_messages, s.assistant_messages, s.total_messages, s.tool_calls,
+        shortPath(s.cwd), s.id,
+    ]);
+    out(renderTable(
+        ['Started', 'UserMessages', 'AssistantMessages', 'TotalMessages', 'ToolCalls', 'Directory', 'Session'],
+        rows, ['l', 'r', 'r', 'r', 'r', 'l', 'l']));
+    out('');
+    out('No shutdown event was recorded for these (still running or ended abnormally),');
+    out('so their usage was never captured and is not counted in any total.');
 }
 
 function resolveSession(prefix) {
@@ -943,11 +1042,15 @@ function fail(msg, opts) {
 const HELP = `copilot-usage ${VERSION} -- GitHub Copilot CLI usage report
 
 Usage:
-  copilot-usage [period]           Summary: a totals table for every period, then
-                                   that period (default all) grouped by model /
-                                   directory / repository, then today's sessions
+  copilot-usage                    Overview: a totals table for every period
+                                   (today / this week / this month / all time)
+  copilot-usage <period>           That period grouped by model / directory /
+                                   repository, plus its sessions
   copilot-usage sessions [period]  One line per session in a period (default all)
   copilot-usage session <id>       Detail for one session (id prefix accepted)
+  copilot-usage incomplete [period]
+                                   Sessions with no shutdown event (usage never
+                                   recorded, so excluded from every total)
 
   period is one of: ${PERIODS.join(', ')}
 
@@ -957,11 +1060,15 @@ Options:
   --period <p>      Which period the summary groups by (default all). Same as the
                     positional period, e.g. \`copilot-usage week\`.
   --dimension <list>
-                    Which dimensions the summary groups by: a comma-separated list
-                    of ${DIMENSIONS.join(', ')} (also: all, none). Default all.
+                    Group by these dimensions: a comma-separated list of
+                    ${DIMENSIONS.join(', ')} (also: all, none). When given,
+                    shows only those grouping tables for the period (all time if
+                    none given) -- no totals or session list. Default all.
                     Affects text only; --json always has all three.
-  --top <n>         Rows to show per summary/session table before "... and N more"
-                    (default ${DEFAULT_TOP}; 0 = show all). Affects text only.
+  --top <n>         Rows to show per table before "... and N more" (default
+                    ${DEFAULT_TOP}; 0 = show all). Also opts into the detailed view.
+                    Piped (non-TTY) output shows all rows unless set.
+                    Affects text only.
   --anomaly-days <n>
                     Warn about anomalies only when newer than n days (default
                     ${DEFAULT_ANOMALY_DAYS}; 0 = never). Older ones are still listed, just not flagged.
@@ -977,10 +1084,13 @@ Options:
   -v, --version     Show version
 
 Examples:
-  copilot-usage                    summary, grouped by all time
-  copilot-usage week               summary, grouped by this week
-  copilot-usage --dimension model  summary, only the by-model grouping
+  copilot-usage                    overview totals for every period
+  copilot-usage week               this week, grouped and with its sessions
+  copilot-usage all                all time, fully broken down
+  copilot-usage today --dimension repository
+                                   today, only the by-repository grouping
   copilot-usage sessions month     one line per session this month
+  copilot-usage incomplete         sessions whose usage was never recorded
 
 Reads ~/.copilot/session-state/*/events.jsonl. AIC = totalNanoAiu / 1e9.
 Sessions before ~2026-06 lack nano-AIU data and are excluded from totals.
@@ -1017,7 +1127,7 @@ function parseArgs(argv) {
         json: false, rate: DEFAULT_RATE, cmd: null, arg: null,
         collector: null, collectorTimeout: 1500, dimensions: DIMENSIONS.slice(),
         period: null, anomalyDays: DEFAULT_ANOMALY_DAYS, incompleteDays: DEFAULT_INCOMPLETE_DAYS,
-        top: DEFAULT_TOP,
+        top: DEFAULT_TOP, dimensionsExplicit: false, topExplicit: false,
     };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -1026,15 +1136,15 @@ function parseArgs(argv) {
         else if (a.startsWith('--rate=')) opts.rate = parseFloat(a.slice('--rate='.length));
         else if (a === '--period') opts.period = argv[++i];
         else if (a.startsWith('--period=')) opts.period = a.slice('--period='.length);
-        else if (a === '--dimension' || a === '--dimensions') opts.dimensions = parseDimensions(argv[++i]);
-        else if (a.startsWith('--dimension=')) opts.dimensions = parseDimensions(a.slice('--dimension='.length));
-        else if (a.startsWith('--dimensions=')) opts.dimensions = parseDimensions(a.slice('--dimensions='.length));
+        else if (a === '--dimension' || a === '--dimensions') { opts.dimensions = parseDimensions(argv[++i]); opts.dimensionsExplicit = true; }
+        else if (a.startsWith('--dimension=')) { opts.dimensions = parseDimensions(a.slice('--dimension='.length)); opts.dimensionsExplicit = true; }
+        else if (a.startsWith('--dimensions=')) { opts.dimensions = parseDimensions(a.slice('--dimensions='.length)); opts.dimensionsExplicit = true; }
         else if (a === '--anomaly-days') opts.anomalyDays = parseInt(argv[++i], 10);
         else if (a.startsWith('--anomaly-days=')) opts.anomalyDays = parseInt(a.slice('--anomaly-days='.length), 10);
         else if (a === '--incomplete-days') opts.incompleteDays = parseInt(argv[++i], 10);
         else if (a.startsWith('--incomplete-days=')) opts.incompleteDays = parseInt(a.slice('--incomplete-days='.length), 10);
-        else if (a === '--top') opts.top = parseInt(argv[++i], 10);
-        else if (a.startsWith('--top=')) opts.top = parseInt(a.slice('--top='.length), 10);
+        else if (a === '--top') { opts.top = parseInt(argv[++i], 10); opts.topExplicit = true; }
+        else if (a.startsWith('--top=')) { opts.top = parseInt(a.slice('--top='.length), 10); opts.topExplicit = true; }
         else if (a === '--collector') opts.collector = DEFAULT_COLLECTOR;
         else if (a.startsWith('--collector=')) opts.collector = a.slice('--collector='.length);
         else if (a === '--no-collector') opts.collector = null;
@@ -1055,6 +1165,10 @@ function parseArgs(argv) {
 
 async function main() {
     const opts = parseArgs(process.argv.slice(2));
+    // Piped output (not a TTY) gets every row -- the "... and N more" cap is a
+    // human convenience, but a downstream grep/awk wants the whole table. An
+    // explicit --top still wins.
+    if (!opts.topExplicit && !process.stdout.isTTY) opts.top = Infinity;
     let cmd = opts.cmd || 'summary';
     // `copilot-usage week` is shorthand for the summary grouped by that period.
     if (PERIODS.includes(cmd)) { opts.arg = cmd; cmd = 'summary'; }
@@ -1062,6 +1176,7 @@ async function main() {
         case 'summary': await cmdSummary(opts); break;
         case 'sessions': cmdSessions(opts); break;
         case 'session': cmdSession(opts); break;
+        case 'incomplete': cmdIncomplete(opts); break;
         default:
             if (DIMENSION_ALIASES[cmd]) {
                 process.stderr.write(`error: "${cmd}" is a dimension, not a command. ` +

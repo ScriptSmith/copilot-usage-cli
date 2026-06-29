@@ -13,21 +13,36 @@ GitHub Copilot usage
   This month  $187.55  18754.86        89           295               2958           3253
   All time    $187.55  18754.86        89           295               2958           3253
 
-By model (all time)
+Showing totals only. Run `copilot-usage <period>` (today, week, month, all)
+for a breakdown by model, directory and repository, plus that period's sessions.
+Run `copilot-usage incomplete` for sessions whose usage was never recorded.
+```
+
+The bare command stays terse: just the at-a-glance totals. Name a period to drill
+in -- it scopes everything below the totals to that period:
+
+```
+$ copilot-usage week
+GitHub Copilot usage
+
+  Period     Dollar      AIC  Sessions  UserMessages  AssistantMessages  TotalMessages
+  This week  $46.03  4603.12        31            88                803            891
+
+By model (this week)
 
   Model              Dollar       AIC  Requests  Sessions  InputTokens  OutputTokens
   claude-opus-4.8   $144.37  14436.64      1676        44       158.0M          1.0M
   gpt-5.5            $77.74   7774.39      1338        33        71.2M        531.4k
   ...
 
-Recent sessions
+By session (this week)
 
-  Started           Dollar    AIC  UserMessages  AssistantMessages  TotalMessages  ToolCalls  Session
-  2026-06-29 22:16   $0.03   3.35             1                  1              2          0  6907b511
+  Started           Dollar     AIC  UserMessages  AssistantMessages  TotalMessages  ToolCalls  Session
+  2026-06-29 22:16   $1.52  151.66             7                 24             31         22  6907b511
   ...
 ```
 
-(`copilot-usage week` narrows all of this to one period; see below.)
+Or jump straight to one grouping with `--dimension` (see below).
 
 ## Install
 
@@ -46,28 +61,33 @@ Requires Node >= 14.
 ## Usage
 
 ```
-copilot-usage [period]           Summary: a totals table for every period, then
-                                 that period (default all) grouped by model /
-                                 directory / repository, then today's sessions
+copilot-usage                    Overview: a totals table for every period
+copilot-usage <period>           That period grouped by model / directory /
+                                 repository, plus its sessions
 copilot-usage sessions [period]  One line per session in a period (default: all)
 copilot-usage session <id>       Detail for one session (id prefix accepted)
+copilot-usage incomplete [period]
+                                 Sessions with no shutdown event (usage never
+                                 recorded, so excluded from every total)
 
   period is one of: today, week, month, all
 
 Options:
   --json            Machine-readable JSON output
   --rate <n>        Dollars per AIC for cost display (default 0.01)
-  --period <p>      Which period the summary groups by (default all). Same as the
+  --period <p>      Which period the summary covers (default all). Same as the
                     positional period, e.g. `copilot-usage week`.
-  --dimension <list> Which dimensions the summary groups by (default all):
-                    a comma-separated list of model, directory, repository
-                    (also: all, none). Text only; --json always has all three.
-  --top <n>         Rows to show per summary/session table before "... and N
-                    more" (default 10; 0 = show all). Text only.
+  --dimension <list> Group by these dimensions: a comma-separated list of model,
+                    directory, repository (also: all, none). When given, shows
+                    *only* those grouping tables -- no totals or session list.
+                    Text only; --json always has all three.
+  --top <n>         Rows to show per table before "... and N more" (default 10;
+                    0 = show all). Also opts into the detailed view. Piped
+                    (non-TTY) output shows all rows unless set. Text only.
   --anomaly-days <n>    Warn about anomalies only when newer than n days
                         (default 3; 0 = never). Older ones stay in --json.
-  --incomplete-days <n> Warn about incomplete sessions only when newer than n
-                        days (default 7; 0 = never). Older ones stay in --json.
+  --incomplete-days <n> Treat incomplete sessions as recent only within n days
+                        (default 7; 0 = never). Affects the `recent` flag in --json.
   --collector[=url] Merge live usage from a local OTLP collector and reconcile
                     by session id (default http://127.0.0.1:4318, or
                     $COPILOT_USAGE_COLLECTOR)
@@ -76,15 +96,14 @@ Options:
   -v, --version     Show version
 ```
 
-The summary is scoped to **one** period -- the one picked by the positional
-period or `--period`, default all time (`copilot-usage week` is shorthand for
-`--period week`). It shows a totals table (all four periods for the default all,
-just the chosen period otherwise; columns Period, Dollar, AIC, Sessions,
-UserMessages, AssistantMessages, TotalMessages), then that period grouped by
-dimension, then that period's sessions (which add ToolCalls). Weeks start on
-Monday; periods are bucketed by each session's start time. Long tables are capped
-to the top 10 rows with a "... and N more" line; change the cap with `--top <n>`
-(`--top 0` shows every row).
+**Bare `copilot-usage`** prints only the totals table (all four periods; columns
+Period, Dollar, AIC, Sessions, UserMessages, AssistantMessages, TotalMessages) and
+a pointer to the detail. **Naming a period** (`copilot-usage week`, shorthand for
+`--period week`) scopes everything to that period and adds the detailed view: that
+period grouped by each dimension, then its sessions (which add ToolCalls), ranked
+by spend. Weeks start on Monday; periods are bucketed by each session's start time.
+Long tables are capped to the top 10 rows with a "... and N more" line; change the
+cap with `--top <n>` (`--top 0` shows every row, as does piping the output).
 
 The grouped tables (scoped to the chosen period) show where the spend went:
 
@@ -95,36 +114,39 @@ The grouped tables (scoped to the chosen period) show where the spend went:
 - **By repository** -- AIC and session count per git repository. Focus on this
   dimension (`--dimension repository`) to also get a per-branch split under each
   repo; otherwise the Branch column just shows the count or single branch.
+- **By session** -- one row per session, ranked by dollar/AIC spend.
 
 The directory, repository, and branch come from each session's `session.start`
 event (`data.context.cwd` / `repository` / `branch`).
 
-Pick the period to group by with a positional period or `--period`, and which
-dimensions with `--dimension` (a comma-separated list; order is preserved):
+`--dimension` jumps straight to one or more groupings with nothing else around
+them -- handy for a focused look or for piping. It implies a period via the
+positional/`--period` (default all time); the list is comma-separated and order is
+preserved:
 
 ```bash
-copilot-usage week                         # this week, grouped by all dimensions
-copilot-usage week --dimension model       # this week, only by model
-copilot-usage --dimension repository       # all time, with the per-branch split
-copilot-usage --dimension none             # totals + sessions only, no grouping
+copilot-usage today --dimension repository   # today, only the by-repo split
+copilot-usage --dimension model              # all time, only the by-model table
+copilot-usage --dimension model,directory    # both, in that order, nothing else
 ```
 
-Anomalies and incomplete sessions are *warned* about only while recent (3 days /
-1 week by default); older ones are still reported but no longer flagged. Tune the
-windows with `--anomaly-days` / `--incomplete-days` (`0` disables the warning).
+Anomalies are *warned* about only while recent (3 days by default); older ones are
+still reported but no longer flagged. Tune the window with `--anomaly-days` (`0`
+disables it). Incomplete sessions live under their own `incomplete` command and
+are never folded into totals.
 
 Examples:
 
 ```bash
-copilot-usage                       # summary, all time, + today's sessions
-copilot-usage month                 # summary grouped by this month
+copilot-usage                       # overview totals for every period
+copilot-usage month                 # this month, grouped, with its sessions
 copilot-usage sessions              # every session that recorded usage
 copilot-usage sessions week         # sessions since Monday
 copilot-usage session ca2c4401      # detail (prefix is enough)
-copilot-usage --dimension model     # only the by-model grouping
+copilot-usage incomplete            # sessions whose usage was never recorded
+copilot-usage today --dimension repository   # only the by-repository grouping
 copilot-usage --top 25              # show up to 25 rows per table
-copilot-usage --top 0              # show every row, no cap
-copilot-usage --incomplete-days 0   # never warn about incomplete sessions
+copilot-usage --top 0               # show every row, no cap
 copilot-usage --json                # JSON summary
 copilot-usage sessions today --json
 copilot-usage --rate 0.012          # different $/AIC
@@ -149,9 +171,9 @@ AIC = totalNanoAiu / 1e9
   exit.
 - A session that ends abnormally (crash, kill, reboot) never writes a shutdown
   event, and nothing is recorded incrementally beforehand, so its cost is
-  unrecoverable. Such sessions are reported separately as **incomplete** (a count
-  in the summary/sessions output and an `incomplete_count` field in the JSON);
-  they are never added to totals.
+  unrecoverable. Such sessions are reported separately as **incomplete** (the
+  `copilot-usage incomplete` command, and `incomplete_count` /
+  `incomplete_sessions` in the summary JSON); they are never added to totals.
 - `--rate` only changes the dollar display; the underlying unit is AIC.
 
 A small mtime/size cache under `${XDG_CACHE_HOME:-~/.cache}/copilot-usage-cli/`
@@ -235,10 +257,11 @@ three, plus that period's `sessions` list. `incomplete_count` /
 `incomplete_sessions` cover sessions with activity but no shutdown event (usage
 never recorded); they are not included in `*_aic` totals. Each incomplete session
 has a `recent` flag (within `--incomplete-days`), and `incomplete_recent_count`
-is how many are recent -- only those are warned about; older ones are still
-listed.
+is how many are recent. (The summary JSON still carries these for convenience;
+`copilot-usage incomplete` is the dedicated view.)
 
 `copilot-usage sessions [period] --json` returns `{ period, session_count, totals, incomplete_count, sessions: [...] }`;
+`copilot-usage incomplete [period] --json` returns `{ period, incomplete_count, sessions: [...] }`;
 `copilot-usage session <id> --json` returns one session's detail including
 per-model token counts.
 
