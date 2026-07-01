@@ -85,14 +85,14 @@ Requires Node >= 14.
 ## Usage
 
 ```
-copilot-usage                    Overview: a totals table for every period
-copilot-usage <period>           That period grouped by model / directory /
-                                 repository, plus its sessions
-copilot-usage sessions [period]  One line per session in a period (default: all)
-copilot-usage session <id>       Detail for one session (id prefix accepted)
-copilot-usage incomplete [period]
-                                 Sessions with no shutdown event (usage never
-                                 recorded, so excluded from every total)
+  copilot-usage                    Overview: a totals table for every period
+  copilot-usage <period>           That period grouped by model / directory /
+                                   repository, plus its sessions
+  copilot-usage sessions [period]  One line per session in a period (default: all)
+  copilot-usage session <id>       Detail for one session (id prefix accepted)
+  copilot-usage incomplete [period]
+                                   Sessions with no shutdown event (usage never
+                                   recorded, so excluded from every total)
 
   period is one of: today, week, month, all
 
@@ -101,17 +101,27 @@ Options:
   --rate <n>        Dollars per AIC for cost display (default 0.01)
   --period <p>      Which period the summary covers (default all). Same as the
                     positional period, e.g. `copilot-usage week`.
-  --dimension <list> Group by these dimensions: a comma-separated list of model,
+  --dimension <list>
+                    Group by these dimensions: a comma-separated list of model,
                     directory, repository (also: all, none). When given, shows
                     only those grouping tables, with no totals or session list.
                     Text only; --json always has all three.
   --top <n>         Rows to show per table before "... and N more" (default 10;
                     0 = show all). Also opts into the detailed view. Piped
                     (non-TTY) output shows all rows unless set. Text only.
-  --anomaly-days <n>    Warn about anomalies only when newer than n days
-                        (default 3; 0 = never). Older ones stay in --json.
-  --incomplete-days <n> Treat incomplete sessions as recent only within n days
-                        (default 7; 0 = never). Affects the `recent` flag in --json.
+  --sort <list>     Order table rows by these measures: a comma-separated list of
+                    aic, requests, sessions, input_tokens, output_tokens,
+                    user_messages, assistant_messages, total_messages, tool_calls,
+                    started (also: none). Each takes an optional :asc/:desc suffix
+                    (default :desc); extra measures break ties. A measure a table
+                    lacks is ignored for it. Also opts into the detailed view.
+                    Text only; --json ordering is unchanged.
+  --anomaly-days <n>
+                    Warn about anomalies only when newer than n days
+                    (default 3; 0 = never). Older ones stay in --json.
+  --incomplete-days <n>
+                    Treat incomplete sessions as recent only within n days
+                    (default 7; 0 = never). Affects the `recent` flag in --json.
   --collector[=url] Merge live usage from a local OTLP collector and reconcile
                     by session id (default http://127.0.0.1:4318, or
                     $COPILOT_USAGE_COLLECTOR)
@@ -145,42 +155,30 @@ copilot-usage --dimension model,directory    # both, in that order, nothing else
 Examples:
 
 ```bash
-copilot-usage                       # overview totals for every period
-copilot-usage month                 # this month, grouped, with its sessions
-copilot-usage sessions              # every session that recorded usage
-copilot-usage sessions week         # sessions since Monday
-copilot-usage session ca2c4401      # detail (prefix is enough)
-copilot-usage incomplete            # sessions whose usage was never recorded
-copilot-usage today --dimension repository   # only the by-repository grouping
-copilot-usage --top 25              # show up to 25 rows per table
-copilot-usage --top 0               # show every row, no cap
-copilot-usage --json                # JSON summary
-copilot-usage sessions today --json
-copilot-usage --rate 0.012          # different $/AIC
+copilot-usage                                              # overview totals for every period
+copilot-usage month                                        # this month, grouped, with its sessions
+copilot-usage sessions                                     # every session that recorded usage
+copilot-usage sessions week                                # sessions since Monday
+copilot-usage session ca2c4401                             # detail (prefix is enough)
+copilot-usage incomplete                                   # sessions whose usage was never recorded
+copilot-usage today --dimension repository                 # only the by-repository grouping
+copilot-usage week --dimension model --sort output_tokens  # models by output tokens
+copilot-usage --top 25                                     # show up to 25 rows per table
+copilot-usage --top 0                                      # show every row, no cap
+copilot-usage --json                                       # JSON summary
+copilot-usage sessions today --json                        # today's sessions as JSON
+copilot-usage --rate 0.012                                 # different $/AIC
 ```
 
 ## Live usage (`--collector`)
 
-On-disk totals only count closed sessions. With `--collector`, the CLI also
-fetches live per-session usage from a local OTLP collector and reconciles it with
-the on-disk data by session id:
-
-- A closed session's shutdown total is authoritative.
-- An open session (no shutdown yet) has its live AIC added to the periods, so it
-  counts before it exits. These appear in `live_sessions`, folded into each
-  period's `sessions` list, and with `live:true` in `today_sessions`.
-- If the collector and the shutdown total disagree for the same session, it is
-  reported in `anomalies` (a `mismatch`); a collector session with no log on disk
-  is an `orphan`. Each anomaly carries `start_ms` and a `recent` flag (within
-  `--anomaly-days`); only recent ones are warned about.
-
-Extra JSON fields when `--collector` is used: `collector{connected,url,session_count}`,
-`today_aic_live` / `week_aic_live` / `month_aic_live` / `all_aic_live`,
-`periods[].aic_live`, `periods[].live_session_count`, `live_aic`,
-`live_session_count`, `live_sessions`, `anomalies` (each with `start_ms` /
-`recent`), `anomaly_recent_count`. Without the flag the output is unchanged. The
-collector requires Copilot to be exporting OpenTelemetry
-(`OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318`).
+On-disk totals only count closed sessions. With `--collector` the CLI also reads
+live per-session usage from a local
+[OTLP collector](https://github.com/ScriptSmith/copilot-usage/tree/main/collector)
+and reconciles it by session id, so still-open sessions count before they exit and
+any disagreements surface as `anomalies`. It needs Copilot exporting OpenTelemetry
+to `http://127.0.0.1:4318`, and adds `*_aic_live`, `live_sessions`, and `anomalies`
+fields to `--json`.
 
 ## JSON output
 
