@@ -54,6 +54,30 @@ const DIMENSION_ALIASES = {
     repository: 'repository', repositories: 'repository', repo: 'repository', repos: 'repository',
 };
 
+// The measures --sort can order table rows by, mapped to the row property each
+// reads. Tokens match case-insensitively with _/- stripped, so `aic`,
+// `output_tokens`, `OutputTokens` and `output-tokens` all resolve. dollar/cost
+// are AIC in another unit, so they order identically. A measure a given table
+// lacks (e.g. requests for a directory) is simply ignored for that table.
+const SORT_KEYS = {
+    aic: 'aic', dollar: 'aic', dollars: 'aic', cost: 'aic', usd: 'aic',
+    requests: 'requests', req: 'requests', reqs: 'requests',
+    sessions: 'sessions', session: 'sessions',
+    inputtokens: 'input_tokens', input: 'input_tokens',
+    outputtokens: 'output_tokens', output: 'output_tokens',
+    cachereadtokens: 'cache_read_tokens',
+    cachewritetokens: 'cache_write_tokens',
+    reasoningtokens: 'reasoning_tokens',
+    usermessages: 'user_messages', user: 'user_messages',
+    assistantmessages: 'assistant_messages', assistant: 'assistant_messages',
+    totalmessages: 'total_messages', messages: 'total_messages', total: 'total_messages',
+    toolcalls: 'tool_calls', tools: 'tool_calls',
+    started: 'start_ms', start: 'start_ms', startms: 'start_ms', time: 'start_ms',
+};
+// The measures advertised in help/errors; the map above accepts more aliases.
+const SORT_KEY_LIST = 'aic, requests, sessions, input_tokens, output_tokens, ' +
+    'user_messages, assistant_messages, total_messages, tool_calls, started';
+
 // Aging: anomalies / incomplete sessions older than these (days) are still
 // reported (in JSON, and the extension submenus) but no longer *warned* about --
 // stale crashes and old reconciliation blips shouldn't nag forever. Configurable
@@ -703,6 +727,34 @@ function shortPath(p) {
     return p;
 }
 
+// Default comparators every table falls back to (and uses when --sort is absent):
+// dimension and by-spend session tables rank by AIC descending, the session
+// listings by most-recent-first.
+const byAicDesc = (a, b) => b.aic - a.aic;
+const byStartDesc = (a, b) => (b.start_ms || 0) - (a.start_ms || 0);
+
+// Coerce a measure value to a sortable number; missing/null/NaN sinks to 0 (the
+// bottom for our non-negative measures, matching the old start_ms || 0 handling).
+const sortNum = v => (typeof v === 'number' && isFinite(v)) ? v : 0;
+
+// Return a copy of `rows` ordered by the --sort spec (an array of {key,dir};
+// dir -1 desc, 1 asc), with `defaultCmp` breaking ties. Keys this table doesn't
+// have are dropped, so a spec that doesn't apply leaves the default order. A
+// null/empty spec is just defaultCmp -- so without --sort every table keeps the
+// order it has always had. Render-time only: JSON ordering is never touched.
+function rankRows(rows, sortSpec, defaultCmp) {
+    if (!sortSpec || !sortSpec.length) return rows.slice().sort(defaultCmp);
+    const specs = sortSpec.filter(s => rows.some(r => r[s.key] !== undefined));
+    if (!specs.length) return rows.slice().sort(defaultCmp);
+    return rows.slice().sort((a, b) => {
+        for (const { key, dir } of specs) {
+            const d = sortNum(a[key]) - sortNum(b[key]);
+            if (d) return dir * d;
+        }
+        return defaultCmp(a, b);
+    });
+}
+
 // Print a titled table, capped to `cap` rows with a "... and N more" footer
 // (cap defaults to DEFAULT_TOP; a non-finite cap shows every row). Narrow with a
 // period (`copilot-usage week`), --dimension, or raise/clear it with --top.
@@ -719,8 +771,8 @@ function printCappedTable(title, headers, aligns, rows, cap = DEFAULT_TOP) {
     }
 }
 
-function printModels(src, rate, periodLabel, cap) {
-    const rows = (src.models || []).map(m => [
+function printModels(src, rate, periodLabel, cap, sortSpec) {
+    const rows = rankRows(src.models || [], sortSpec, byAicDesc).map(m => [
         m.model, usd(m.aic, rate), m.aic.toFixed(2), m.requests, m.sessions,
         fmtTokens(m.input_tokens), fmtTokens(m.output_tokens),
     ]);
@@ -729,8 +781,8 @@ function printModels(src, rate, periodLabel, cap) {
         ['l', 'r', 'r', 'r', 'r', 'r', 'r'], rows, cap);
 }
 
-function printDirectories(src, rate, periodLabel, cap) {
-    const rows = (src.directories || []).map(d => [
+function printDirectories(src, rate, periodLabel, cap, sortSpec) {
+    const rows = rankRows(src.directories || [], sortSpec, byAicDesc).map(d => [
         shortPath(d.dir), usd(d.aic, rate), d.aic.toFixed(2), d.sessions, d.repo || '-',
     ]);
     printCappedTable(`By directory (${periodLabel})`,
@@ -741,8 +793,8 @@ function printDirectories(src, rate, periodLabel, cap) {
 // `withBranches` adds a per-branch sub-table for each shown repository; it's only
 // passed when repository is the sole requested dimension, so the default summary
 // stays short (the Branch column already shows the count or the single branch).
-function printRepositories(src, rate, periodLabel, withBranches, cap) {
-    const repos = src.repositories || [];
+function printRepositories(src, rate, periodLabel, withBranches, cap, sortSpec) {
+    const repos = rankRows(src.repositories || [], sortSpec, byAicDesc);
     const rows = repos.map(r => {
         const branches = r.branches || [];
         const branch = branches.length === 1 ? branches[0].branch : `${branches.length} branches`;
@@ -754,7 +806,8 @@ function printRepositories(src, rate, periodLabel, withBranches, cap) {
     if (!withBranches) return;
     // Per-branch detail for the shown repositories worked on across >1 branch.
     for (const r of repos.slice(0, cap).filter(r => (r.branches || []).length > 1)) {
-        const brows = r.branches.map(b => [b.branch, usd(b.aic, rate), b.aic.toFixed(2), b.sessions]);
+        const brows = rankRows(r.branches, sortSpec, byAicDesc)
+            .map(b => [b.branch, usd(b.aic, rate), b.aic.toFixed(2), b.sessions]);
         printCappedTable(INDENT + `${r.repo} by branch:`,
             ['Branch', 'Dollar', 'AIC', 'Sessions'], ['l', 'r', 'r', 'r'], brows, cap);
     }
@@ -763,14 +816,14 @@ function printRepositories(src, rate, periodLabel, withBranches, cap) {
 // Print the requested dimension tables for one period's totals, in the requested
 // order. `src` carries .models/.directories/.repositories; `which` is a subset of
 // DIMENSIONS (empty prints nothing); `periodLabel` annotates the headings.
-function printDimensions(src, rate, which, periodLabel, cap) {
+function printDimensions(src, rate, which, periodLabel, cap, sortSpec) {
     which = which || DIMENSIONS;
     // Show the per-branch drill-in only when the user has focused on repositories.
     const withBranches = which.length === 1 && which[0] === 'repository';
     for (const kind of which) {
-        if (kind === 'model') printModels(src, rate, periodLabel, cap);
-        else if (kind === 'directory') printDirectories(src, rate, periodLabel, cap);
-        else if (kind === 'repository') printRepositories(src, rate, periodLabel, withBranches, cap);
+        if (kind === 'model') printModels(src, rate, periodLabel, cap, sortSpec);
+        else if (kind === 'directory') printDirectories(src, rate, periodLabel, cap, sortSpec);
+        else if (kind === 'repository') printRepositories(src, rate, periodLabel, withBranches, cap, sortSpec);
     }
 }
 
@@ -802,7 +855,7 @@ async function cmdSummary(opts) {
     // -- gives the full detailed view (totals + every dimension + by-session). Bare
     // `copilot-usage` stays terse: just the totals table.
     const dimensionOnly = opts.dimensionsExplicit;
-    const detailed = dimensionOnly || !!explicitPeriod || opts.topExplicit;
+    const detailed = dimensionOnly || !!explicitPeriod || opts.topExplicit || opts.sort != null;
 
     const { sessions, incomplete, error } = collect(false);
     const sum = summarize(sessions, incomplete, now, opts.incompleteDays);
@@ -821,7 +874,7 @@ async function cmdSummary(opts) {
 
     // Dimension-only: just the requested grouping table(s), nothing else.
     if (dimensionOnly) {
-        printDimensions(src, opts.rate, opts.dimensions, periodLabel, opts.top);
+        printDimensions(src, opts.rate, opts.dimensions, periodLabel, opts.top, opts.sort);
         return;
     }
 
@@ -843,12 +896,10 @@ async function cmdSummary(opts) {
     if (detailed) {
         // Break the chosen period down by the requested dimensions, then rank that
         // period's sessions by spend -- everything below the table is scoped to it.
-        printDimensions(src, opts.rate, opts.dimensions, periodLabel, opts.top);
+        printDimensions(src, opts.rate, opts.dimensions, periodLabel, opts.top, opts.sort);
 
         const fmtWhen = period === 'today' ? fmtClock : fmtDateTime;
-        const sessRows = src.sessions
-            .slice()
-            .sort((a, b) => b.aic - a.aic)
+        const sessRows = rankRows(src.sessions, opts.sort, byAicDesc)
             .map(s => sessionRow(s, fmtWhen(s.start_ms), s.id.slice(0, 8), opts.rate));
         const sessTitle = `By session (${periodLabel})`;
         if (!sessRows.length) {
@@ -896,7 +947,8 @@ function cmdSessions(opts) {
     out(`Sessions (${PERIOD_LABELS[period].toLowerCase()})`);
     out('');
     const headers = ['Started', 'Dollar', 'AIC', 'UserMessages', 'AssistantMessages', 'TotalMessages', 'ToolCalls', 'Session'];
-    const rows = inRange.map(s => sessionRow(s, fmtDateTime(s.start_ms), s.id, opts.rate));
+    const rows = rankRows(inRange, opts.sort, byStartDesc)
+        .map(s => sessionRow(s, fmtDateTime(s.start_ms), s.id, opts.rate));
     // totals row
     const t = aggregate(sessions, period, now);
     rows.push(['', usd(t.aic, opts.rate), t.aic.toFixed(2),
@@ -934,7 +986,7 @@ function cmdIncomplete(opts) {
 
     out(`Incomplete sessions (${PERIOD_LABELS[period].toLowerCase()})`);
     out('');
-    const rows = inRange.map(s => [
+    const rows = rankRows(inRange, opts.sort, byStartDesc).map(s => [
         fmtDateTime(s.start_ms),
         s.user_messages, s.assistant_messages, s.total_messages, s.tool_calls,
         shortPath(s.cwd), s.id,
@@ -1069,6 +1121,12 @@ Options:
                     ${DEFAULT_TOP}; 0 = show all). Also opts into the detailed view.
                     Piped (non-TTY) output shows all rows unless set.
                     Affects text only.
+  --sort <list>     Order table rows by these measures: a comma-separated list of
+                    ${SORT_KEY_LIST}
+                    (also: none). Each may take a :asc or :desc suffix (default
+                    :desc); extra measures break ties. A measure a table lacks is
+                    ignored for it. Also opts into the detailed view.
+                    Affects text only; --json ordering is unchanged.
   --anomaly-days <n>
                     Warn about anomalies only when newer than n days (default
                     ${DEFAULT_ANOMALY_DAYS}; 0 = never). Older ones are still listed, just not flagged.
@@ -1089,6 +1147,8 @@ Examples:
   copilot-usage all                all time, fully broken down
   copilot-usage today --dimension repository
                                    today, only the by-repository grouping
+  copilot-usage week --dimension model --sort output_tokens
+                                   this week's models, ranked by output tokens
   copilot-usage sessions month     one line per session this month
   copilot-usage incomplete         sessions whose usage was never recorded
 
@@ -1122,12 +1182,47 @@ function parseDimensions(str) {
     return out;
 }
 
+// Parse a --sort value (comma-separated `measure[:asc|:desc]`) into an ordered,
+// deduped list of { key, dir } specs (dir: -1 desc, the default, or 1 asc). A
+// measure a table lacks is ignored for that table; `none` clears the list so
+// far. Exits(2) on an unknown measure or direction, matching --dimension.
+function parseSort(str) {
+    if (str == null) {
+        process.stderr.write(`error: --sort requires a value (${SORT_KEY_LIST}; suffix :asc or :desc)\n`);
+        process.exit(2);
+    }
+    const specs = [];
+    for (const raw of String(str).split(',')) {
+        const t = raw.trim();
+        if (!t) continue;
+        if (t.toLowerCase() === 'none') { specs.length = 0; continue; }
+        const colon = t.indexOf(':');
+        const name = colon === -1 ? t : t.slice(0, colon);
+        const dirTok = (colon === -1 ? '' : t.slice(colon + 1)).trim().toLowerCase();
+        const key = SORT_KEYS[name.toLowerCase().replace(/[_-]/g, '')];
+        if (!key) {
+            process.stderr.write(`error: unknown sort key "${name}" (use: ${SORT_KEY_LIST})\n`);
+            process.exit(2);
+        }
+        let dir;
+        if (dirTok === '' || dirTok === 'desc' || dirTok === 'descending' || dirTok === 'd' || dirTok === 'down') dir = -1;
+        else if (dirTok === 'asc' || dirTok === 'ascending' || dirTok === 'a' || dirTok === 'up') dir = 1;
+        else {
+            process.stderr.write(`error: unknown sort direction "${dirTok}" for "${name}" (use asc or desc)\n`);
+            process.exit(2);
+        }
+        if (!specs.some(s => s.key === key)) specs.push({ key, dir });
+    }
+    return specs;
+}
+
 function parseArgs(argv) {
     const opts = {
         json: false, rate: DEFAULT_RATE, cmd: null, arg: null,
         collector: null, collectorTimeout: 1500, dimensions: DIMENSIONS.slice(),
         period: null, anomalyDays: DEFAULT_ANOMALY_DAYS, incompleteDays: DEFAULT_INCOMPLETE_DAYS,
         top: DEFAULT_TOP, dimensionsExplicit: false, topExplicit: false,
+        sort: null,
     };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -1145,6 +1240,8 @@ function parseArgs(argv) {
         else if (a.startsWith('--incomplete-days=')) opts.incompleteDays = parseInt(a.slice('--incomplete-days='.length), 10);
         else if (a === '--top') { opts.top = parseInt(argv[++i], 10); opts.topExplicit = true; }
         else if (a.startsWith('--top=')) { opts.top = parseInt(a.slice('--top='.length), 10); opts.topExplicit = true; }
+        else if (a === '--sort') opts.sort = parseSort(argv[++i]);
+        else if (a.startsWith('--sort=')) opts.sort = parseSort(a.slice('--sort='.length));
         else if (a === '--collector') opts.collector = DEFAULT_COLLECTOR;
         else if (a.startsWith('--collector=')) opts.collector = a.slice('--collector='.length);
         else if (a === '--no-collector') opts.collector = null;
